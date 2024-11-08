@@ -943,6 +943,7 @@ func (bc *BlockChain) stopWithoutSaving() {
 // Stop stops the blockchain service. If any imports are currently in progress
 // it will abort them using the procInterrupt.
 func (bc *BlockChain) Stop() {
+	pause.Stop()
 	bc.stopWithoutSaving()
 
 	// Ensure that the entirety of the state snapshot is journaled to disk.
@@ -967,7 +968,6 @@ func (bc *BlockChain) Stop() {
 	}
 
 	tracecache.Stop()
-	pause.Stop()
 	log.Info("Blockchain stopped")
 }
 
