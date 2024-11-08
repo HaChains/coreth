@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/ava-labs/coreth/kclients/syncstatus"
 
 	"github.com/go-redis/redis/v8"
 
@@ -26,6 +27,9 @@ type redisCache struct {
 	endpoint string
 	db       int
 
+	cut    int64 // height cut last time
+	synced bool
+
 	ch chan kv
 }
 
@@ -42,12 +46,17 @@ func (c *redisCache) send(v kv) error {
 		v.traceResult,
 	)
 
-	if v.blockNumber > c.size {
-		c.rdb.HDel(
-			context.TODO(),
-			c.key,
-			fmt.Sprint(v.blockNumber-c.size),
-		)
+	if c.synced {
+		go c.Cut(syncstatus.RedisHeight())
+	} else {
+		// if syncing, simply deleted the data beyond the cache size
+		if v.blockNumber > c.size {
+			c.rdb.HDel(
+				context.TODO(),
+				c.key,
+				fmt.Sprint(v.blockNumber-c.size),
+			)
+		}
 	}
 	return nil
 }
@@ -81,6 +90,7 @@ func Start(ctx context.Context) {
 	endpoint := env.LoadEnvString(env.EnvTraceCacheEndpoint)
 	db := env.LoadEnvInt(env.EnvTraceCacheDB)
 	key := env.LoadEnvString(env.EnvTraceCacheKey)
+	synced := env.LoadEnvBool(env.EnvTraceCacheSynced)
 
 	if endpoint == "" {
 		return
@@ -115,9 +125,12 @@ func Start(ctx context.Context) {
 		endpoint: endpoint,
 		db:       db,
 
+		synced: synced,
+
 		ch: make(chan kv, chanSize),
 	}
 	close(untilStart)
+	c.Sweep(syncstatus.RedisHeight())
 	go c.loop()
 	rc = c
 	log.Info("### DEBUG ### redis cache service started")

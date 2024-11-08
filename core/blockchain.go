@@ -48,6 +48,7 @@ import (
 	"github.com/ava-labs/coreth/core/vm"
 	"github.com/ava-labs/coreth/internal/version"
 	"github.com/ava-labs/coreth/kclients/pause"
+	"github.com/ava-labs/coreth/kclients/syncstatus"
 	"github.com/ava-labs/coreth/kclients/tracecache"
 	"github.com/ava-labs/coreth/metrics"
 	"github.com/ava-labs/coreth/params"
@@ -454,6 +455,7 @@ func NewBlockChain(
 		}()
 	}
 
+	syncstatus.Start()
 	tracecache.Start(context.Background())
 	pause.Start()
 

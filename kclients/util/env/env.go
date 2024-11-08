@@ -14,6 +14,7 @@ import (
 const (
 	EnvTestOffset      = "TEST_OFFSET"
 	EnvTestRedisHeight = "TEST_REDIS_HEIGHT"
+	EnvETLPauseEnabled = "ETL_PAUSE_ENABLED"
 	EnvETLAllowBehind  = "ETL_ALLOW_BEHIND"
 	EnvETLMasterName   = "ETL_MASTER_NAME"
 	EnvETLPassword     = "ETL_PASSWORD"
@@ -27,6 +28,7 @@ const (
 	EnvTraceCacheKey      = "TRACE_CACHE_KEY"
 	EnvTraceCacheEndpoint = "TRACE_CACHE_ENDPOINT"
 	EnvTraceCacheDB       = "TRACE_CACHE_DB"
+	EnvTraceCacheSynced   = "TRACE_CACHE_SYNCED"
 	EnvTraceCacheSize     = "TRACE_CACHE_SIZE"
 	EnvTraceCacheChanSize = "TRACE_CACHE_CHAN_SIZE"
 )
@@ -35,6 +37,20 @@ const (
 	WrongInt   = -1024
 	DefaultInt = 0
 )
+
+func LoadEnvBool(v string) bool {
+	env := os.Getenv(v)
+	if env != "" {
+		b, err := strconv.ParseBool(env)
+		if err != nil {
+			sig.Int(fmt.Sprintf("failed to parse '%s' of value '%s'\n", v, env))
+			return false
+		}
+		log.Info("### DEBUG ### Loaded ENV", v, b)
+		return b
+	}
+	return false
+}
 
 func LoadEnvInt64(v string) int64 {
 	env := os.Getenv(v)
