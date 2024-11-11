@@ -34,20 +34,23 @@ func (c *redisCache) Sweep(syncedHeight int64) {
 
 // Cut deletes the data consumed recently
 func (c *redisCache) Cut(to int64) {
-	if c.cut == 0 {
+	if c.cut <= 0 {
 		log.Warn("### DEBUG ### [redisCache.Cut] no last cut point", "key", c.key)
 		return
 	}
+	if to == c.cut {
+		return
+	}
 	from := c.cut + 1
-	cut := 0
+	cutCnt := 0
 	for i := from; i <= to; i++ {
 		n, err := c.rdb.HDel(context.Background(), c.key, fmt.Sprint(i)).Result()
 		if err != nil {
 			log.Error("### DEBUG ### [redisCache.Cut]", "key", fmt.Sprintf("%s:%v", c.key, i), "err", err)
 		} else {
-			cut += int(n)
+			cutCnt += int(n)
 		}
 	}
 	c.cut = to
-	log.Info("### DEBUG ### [redisCache.Cut]", "[from,to]", fmt.Sprintf("[%d,%d]", from, to), "progress", fmt.Sprintf("%d/%d", cut, to-from+1))
+	log.Info("### DEBUG ### [redisCache.Cut]", "[from,to]", fmt.Sprintf("[%d,%d]", from, to), "progress", fmt.Sprintf("%d/%d", cutCnt, to-from+1))
 }
