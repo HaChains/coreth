@@ -6,6 +6,7 @@ package evm
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -17,6 +18,9 @@ import (
 	"github.com/ava-labs/coreth/core"
 	"github.com/ava-labs/coreth/core/rawdb"
 	"github.com/ava-labs/coreth/core/types"
+	"github.com/ava-labs/coreth/core/vm"
+	"github.com/ava-labs/coreth/eth/tracers"
+	"github.com/ava-labs/coreth/kclients/tracecache"
 	"github.com/ava-labs/coreth/params"
 	"github.com/ava-labs/coreth/plugin/evm/atomic"
 	"github.com/ava-labs/coreth/plugin/evm/header"
@@ -308,6 +312,13 @@ func (b *Block) VerifyWithContext(ctx context.Context, proposerVMBlockCtx *block
 	}, true)
 }
 
+// txTraceResult is the result of a single transaction trace.
+type txTraceResult struct {
+	TxHash common.Hash `json:"txHash"`           // transaction hash
+	Result interface{} `json:"result,omitempty"` // Trace results produced by the tracer
+	Error  string      `json:"error,omitempty"`  // Trace failure produced by the tracer
+}
+
 // Verify the block is valid.
 // Enforces that the predicates are valid within [predicateContext].
 // Writes the block details to disk and the state to the trie manager iff writes=true.
@@ -344,8 +355,11 @@ func (b *Block) verify(predicateContext *precompileconfig.PredicateContext, writ
 	if b.vm.State.IsProcessing(b.id) {
 		return nil
 	}
-
-	err := b.vm.blockChain.InsertBlockManual(b.ethBlock, writes)
+	evmLoggers := make([]vm.EVMLogger, len(b.ethBlock.Transactions()))
+	for i := 0; i < len(evmLoggers); i++ {
+		evmLoggers[i], _ = tracers.DefaultDirectory.New("callTracer", &tracers.Context{}, nil)
+	}
+	err := b.vm.blockChain.InsertBlockManual(b.ethBlock, writes, evmLoggers)
 	if err != nil || !writes {
 		// if an error occurred inserting the block into the chain
 		// or if we are not pinning to memory, unpin the atomic trie
@@ -354,6 +368,22 @@ func (b *Block) verify(predicateContext *precompileconfig.PredicateContext, writ
 			_ = atomicState.Reject() // ignore this error so we can return the original error instead.
 		}
 	}
+	results := make([]*txTraceResult, len(b.ethBlock.Transactions()))
+	for i, logger := range evmLoggers {
+		res, err := logger.(tracers.Tracer).GetResult()
+		if err != nil {
+			return fmt.Errorf("### DEBUG ### %w", err)
+		}
+		results[i] = &txTraceResult{
+			TxHash: b.ethBlock.Transactions()[i].Hash(),
+			Result: res,
+		}
+	}
+	data, err := json.Marshal(results)
+	if err != nil {
+		return fmt.Errorf("### DEBUG ### %w", err)
+	}
+	tracecache.Write(b.ethBlock.Number().Int64(), data)
 	return err
 }
 
