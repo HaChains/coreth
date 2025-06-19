@@ -28,11 +28,13 @@
 package core
 
 import (
+	"errors"
 	"fmt"
 	"math/big"
 
 	"github.com/ava-labs/coreth/consensus"
 	"github.com/ava-labs/coreth/core/state"
+	"github.com/ava-labs/coreth/kclients/pause"
 	"github.com/ava-labs/coreth/params"
 	"github.com/ava-labs/libevm/common"
 	"github.com/ava-labs/libevm/core/types"
@@ -60,6 +62,10 @@ func NewStateProcessor(config *params.ChainConfig, bc *BlockChain, engine consen
 	}
 }
 
+func (p *StateProcessor) Process(block *types.Block, parent *types.Header, statedb *state.StateDB, cfg vm.Config) (types.Receipts, []*types.Log, uint64, error) {
+	return p.ProcessWithTracers(block, parent, statedb, cfg, nil)
+}
+
 // Process processes the state changes according to the Ethereum rules by running
 // the transaction messages using the statedb and applying any rewards to both
 // the processor (coinbase) and any included uncles.
@@ -67,7 +73,7 @@ func NewStateProcessor(config *params.ChainConfig, bc *BlockChain, engine consen
 // Process returns the receipts and logs accumulated during the process and
 // returns the amount of gas that was used in the process. If any of the
 // transactions failed to execute due to insufficient gas it will return an error.
-func (p *StateProcessor) Process(block *types.Block, parent *types.Header, statedb *state.StateDB, cfg vm.Config) (types.Receipts, []*types.Log, uint64, error) {
+func (p *StateProcessor) ProcessWithTracers(block *types.Block, parent *types.Header, statedb *state.StateDB, cfg vm.Config, tracers []vm.EVMLogger) (types.Receipts, []*types.Log, uint64, error) {
 	var (
 		receipts    types.Receipts
 		usedGas     = new(uint64)
@@ -77,6 +83,12 @@ func (p *StateProcessor) Process(block *types.Block, parent *types.Header, state
 		allLogs     []*types.Log
 		gp          = new(GasPool).AddGas(block.GasLimit())
 	)
+	if pause.RedisBehind(blockNumber.Int64()) {
+		shutdown := pause.PauseIfBehind("[StateProcessor Process]")
+		if shutdown {
+			return nil, nil, 0, errors.New("### DEBUG ### stop execution")
+		}
+	}
 
 	// Configure any upgrades that should go into effect during this block.
 	blockContext := NewBlockContext(block.Number(), block.Time())
@@ -95,6 +107,10 @@ func (p *StateProcessor) Process(block *types.Block, parent *types.Header, state
 	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
 		ProcessBeaconBlockRoot(*beaconRoot, vmenv, statedb)
 	}
+	var setTracer = false
+	if tracers != nil {
+		setTracer = true
+	}
 	// Iterate over and process the individual transactions
 	for i, tx := range block.Transactions() {
 		msg, err := TransactionToMessage(tx, signer, header.BaseFee)
@@ -102,6 +118,9 @@ func (p *StateProcessor) Process(block *types.Block, parent *types.Header, state
 			return nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
 		}
 		statedb.SetTxContext(tx.Hash(), i)
+		if setTracer {
+			vmenv.Config.Tracer = tracers[i]
+		}
 		receipt, err := applyTransaction(msg, p.config, gp, statedb, blockNumber, blockHash, tx, usedGas, vmenv)
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
@@ -112,6 +131,9 @@ func (p *StateProcessor) Process(block *types.Block, parent *types.Header, state
 	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards)
 	if err := p.engine.Finalize(p.bc, block, parent, statedb, receipts); err != nil {
 		return nil, nil, 0, fmt.Errorf("engine finalization check failed: %w", err)
+	}
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("### DEBUG ### could not get result from tracer: %w", err)
 	}
 
 	return receipts, allLogs, *usedGas, nil

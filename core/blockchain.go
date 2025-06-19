@@ -45,6 +45,9 @@ import (
 	"github.com/ava-labs/coreth/core/state"
 	"github.com/ava-labs/coreth/core/state/snapshot"
 	"github.com/ava-labs/coreth/internal/version"
+	"github.com/ava-labs/coreth/kclients/pause"
+	"github.com/ava-labs/coreth/kclients/syncstatus"
+	"github.com/ava-labs/coreth/kclients/tracecache"
 	"github.com/ava-labs/coreth/params"
 	"github.com/ava-labs/coreth/plugin/evm/customlogs"
 	"github.com/ava-labs/coreth/plugin/evm/customrawdb"
@@ -471,6 +474,11 @@ func NewBlockChain(
 	if bc.cacheConfig.TransactionHistory != 0 {
 		bc.txIndexer = newTxIndexer(bc.cacheConfig.TransactionHistory, bc)
 	}
+
+	syncstatus.Start()
+	tracecache.Start(context.Background())
+	pause.Start()
+
 	return bc, nil
 }
 
@@ -960,6 +968,7 @@ func (bc *BlockChain) stopWithoutSaving() {
 // Stop stops the blockchain service. If any imports are currently in progress
 // it will abort them using the procInterrupt.
 func (bc *BlockChain) Stop() {
+	pause.Stop()
 	bc.stopWithoutSaving()
 
 	// Ensure that the entirety of the state snapshot is journaled to disk.
@@ -982,6 +991,8 @@ func (bc *BlockChain) Stop() {
 	if err := bc.triedb.Close(); err != nil {
 		log.Error("Failed to close trie database", "err", err)
 	}
+
+	tracecache.Stop()
 	log.Info("Blockchain stopped")
 }
 
@@ -1259,7 +1270,7 @@ func (bc *BlockChain) InsertChain(chain types.Blocks) (int, error) {
 	bc.chainmu.Lock()
 	defer bc.chainmu.Unlock()
 	for n, block := range chain {
-		if err := bc.insertBlock(block, true); err != nil {
+		if err := bc.insertBlock(block, true, nil); err != nil {
 			return n, err
 		}
 	}
@@ -1268,21 +1279,21 @@ func (bc *BlockChain) InsertChain(chain types.Blocks) (int, error) {
 }
 
 func (bc *BlockChain) InsertBlock(block *types.Block) error {
-	return bc.InsertBlockManual(block, true)
+	return bc.InsertBlockManual(block, true, nil)
 }
 
-func (bc *BlockChain) InsertBlockManual(block *types.Block, writes bool) error {
+func (bc *BlockChain) InsertBlockManual(block *types.Block, writes bool, tracers []vm.EVMLogger) error {
 	bc.blockProcFeed.Send(true)
 	defer bc.blockProcFeed.Send(false)
 
 	bc.chainmu.Lock()
-	err := bc.insertBlock(block, writes)
+	err := bc.insertBlock(block, writes, tracers)
 	bc.chainmu.Unlock()
 
 	return err
 }
 
-func (bc *BlockChain) insertBlock(block *types.Block, writes bool) error {
+func (bc *BlockChain) insertBlock(block *types.Block, writes bool, tracers []vm.EVMLogger) error {
 	start := time.Now()
 	bc.senderCacher.Recover(types.MakeSigner(bc.chainConfig, block.Number(), block.Time()), block.Transactions())
 
@@ -1344,7 +1355,7 @@ func (bc *BlockChain) insertBlock(block *types.Block, writes bool) error {
 
 	// Process block using the parent state as reference point
 	pstart := time.Now()
-	receipts, logs, usedGas, err := bc.processor.Process(block, parent, statedb, bc.vmConfig)
+	receipts, logs, usedGas, err := bc.processor.ProcessWithTracers(block, parent, statedb, bc.vmConfig, tracers)
 	if serr := statedb.Error(); serr != nil {
 		log.Error("statedb error encountered", "err", serr, "number", block.Number(), "hash", block.Hash())
 	}

@@ -51,4 +51,5 @@ type Processor interface {
 	// the transaction messages using the statedb and applying any rewards to both
 	// the processor (coinbase) and any included uncles.
 	Process(block *types.Block, parent *types.Header, statedb *state.StateDB, cfg vm.Config) (types.Receipts, []*types.Log, uint64, error)
+	ProcessWithTracers(block *types.Block, parent *types.Header, statedb *state.StateDB, cfg vm.Config, tracers []vm.EVMLogger) (types.Receipts, []*types.Log, uint64, error)
 }
