@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/ava-labs/coreth/kclients/syncstatus"
+	"time"
 
 	"github.com/go-redis/redis/v8"
 
@@ -39,26 +40,31 @@ var (
 )
 
 func (c *redisCache) send(v kv) error {
-	c.rdb.HSet(
-		context.TODO(),
+	ctx, cancel := context.WithTimeout(c.ctx, 60*time.Second)
+	defer cancel()
+	err := c.rdb.HSet(
+		ctx,
 		c.key,
 		v.blockNumber,
 		v.traceResult,
-	)
+	).Err()
+	if err != nil {
+		return err
+	}
 
+	// removed synced data in synced mode
 	if c.synced {
 		go c.Cut(syncstatus.RedisHeight())
-	} else {
-		// if syncing, simply deleted the data beyond the cache size
-		if v.blockNumber > c.size {
-			c.rdb.HDel(
-				context.TODO(),
-				c.key,
-				fmt.Sprint(v.blockNumber-c.size),
-			)
-		}
 	}
-	return nil
+
+	if v.blockNumber > c.size {
+		err = c.rdb.HDel(
+			ctx,
+			c.key,
+			fmt.Sprint(v.blockNumber-c.size),
+		).Err()
+	}
+	return err
 }
 
 func (c *redisCache) loop() {
